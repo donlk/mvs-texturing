@@ -19,25 +19,3 @@ externalproject_add(ext_rayint
     BUILD_COMMAND   ""
     INSTALL_COMMAND ""
 )
-
-#find_package eigen
-externalproject_add(ext_eigen
-    PREFIX          ext_eigen
-    URL             https://bitbucket.org/eigen/eigen/get/3.2.8.tar.bz2
-    URL_MD5         9e3bfaaab3db18253cfd87ea697b3ab1
-    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/elibs/eigen
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND   ""
-    INSTALL_COMMAND ""
-)
-
-externalproject_add(ext_mve
-    PREFIX          mve
-    GIT_REPOSITORY  https://github.com/nmoehrle/mve.git
-    UPDATE_COMMAND  ""
-    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/elibs/mve
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND   make -C libs/mve && make -C libs/util #not platform independent
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND ""
-)
