@@ -41,10 +41,11 @@ include_directories(SYSTEM
 
 include_directories(
     libs
+    ${MVE_INCLUDE_DIR}
 )
 
 link_directories(
-    ${MVE_LIBARY_DIR}
+    ${MVE_LIBRARY_DIR}
 )
 
 if(RESEARCH)
