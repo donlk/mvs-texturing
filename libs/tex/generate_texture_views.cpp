@@ -159,7 +159,7 @@ from_images_and_camera_files(std::string const & path, std::vector<TextureView> 
             }
 
             image_file = std::string("/tmp/") + util::fs::basename(img_file);
-            mve::image::save_png_file(image, image_file);
+            mve::image::save_jpg_file(image, image_file, 100);
         }
 
         #pragma omp critical
@@ -191,7 +191,7 @@ from_nvm_scene(std::string const & nvm_file, std::vector<TextureView> * texture_
             (image, mve_cam.flen, nvm_cam.radial_distortion);
 
         std::string image_file = std::string("/tmp/") + util::fs::basename(nvm_cam.filename);
-        mve::image::save_png_file(image, image_file);
+        mve::image::save_jpg_file(image, image_file, 100);
 
         #pragma omp critical
         texture_views->push_back(TextureView(i, mve_cam, image_file));
