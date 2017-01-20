@@ -60,7 +60,8 @@ struct TexturePatchCandidate {
   */
 TexturePatchCandidate
 generate_candidate(int label, TextureView const & texture_view,
-    std::vector<std::size_t> const & faces, mve::TriangleMesh::ConstPtr mesh) {
+    std::vector<std::size_t> const & faces, mve::TriangleMesh::ConstPtr mesh,
+    Settings const & settings) {
 
     mve::ByteImage::Ptr view_image = texture_view.get_image();
     int min_x = view_image->width(), min_y = view_image->height();
@@ -77,12 +78,27 @@ generate_candidate(int label, TextureView const & texture_view,
 
             texcoords.push_back(pixel);
 
-            min_x = std::min(static_cast<int>(std::floor(pixel[0])) - texture_patch_border, min_x);
-            min_y = std::min(static_cast<int>(std::floor(pixel[1])) - texture_patch_border, min_y);
-            max_x = std::max(static_cast<int>(std::ceil(pixel[0])) + texture_patch_border, max_x);
-            max_y = std::max(static_cast<int>(std::ceil(pixel[1])) + texture_patch_border, max_y);
+            min_x = std::min(static_cast<int>(std::floor(pixel[0])), min_x);
+            min_y = std::min(static_cast<int>(std::floor(pixel[1])), min_y);
+            max_x = std::max(static_cast<int>(std::ceil(pixel[0])), max_x);
+            max_y = std::max(static_cast<int>(std::ceil(pixel[1])), max_y);
         }
     }
+
+    /* Check for valid projections/erroneous labeling files. */
+    assert(min_x >= 0);
+    assert(min_y >= 0);
+    assert(max_x < view_image->width());
+    assert(max_y < view_image->height());
+
+    int width = max_x - min_x + 1;
+    int height = max_y - min_y + 1;
+
+    /* Add border and adjust min accordingly. */
+    width += 2 * texture_patch_border;
+    height += 2 * texture_patch_border;
+    min_x -= texture_patch_border;
+    min_y -= texture_patch_border;
 
     /* Calculate the relative texcoords. */
     math::Vec2f min(min_x, min_y);
@@ -90,18 +106,13 @@ generate_candidate(int label, TextureView const & texture_view,
         texcoords[i] = texcoords[i] - min;
     }
 
-    int const width = max_x - min_x;
-    int const height = max_y - min_y;
+    mve::ByteImage::Ptr byte_image;
+    byte_image = mve::image::crop(view_image, width, height, min_x, min_y, *math::Vec3uc(255, 0, 255));
+    mve::FloatImage::Ptr image = mve::image::byte_to_float_image(byte_image);
 
-    /* Check for valid projections/erroneous labeling files. */
-    assert(min_x >= 0 - texture_patch_border);
-    assert(min_y >= 0 - texture_patch_border);
-    assert(max_x < view_image->width() + texture_patch_border);
-    assert(max_y < view_image->height() + texture_patch_border);
-
-    mve::ByteImage::Ptr image;
-    image = mve::image::crop(view_image, width, height, min_x, min_y, *math::Vec3uc(255, 0, 255));
-    mve::image::gamma_correct(image, 2.2f);
+    if (!settings.tone_mapping == TONE_MAPPING_NONE) {
+        mve::image::gamma_correct(image, 2.2f);
+    }
 
     TexturePatchCandidate texture_patch_candidate =
         {Rect<int>(min_x, min_y, max_x, max_y),
@@ -254,22 +265,29 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
     for (std::size_t j = 0; j < border.size(); ++j) {
         std::size_t vi0 = border[j];
         std::size_t vi1 = border[(j + 1) % border.size()];
-        std::vector<VertexProjectionInfo> const & vpi0 = vertex_projection_infos->at(vi0);
-        std::vector<VertexProjectionInfo> const & vpi1 = vertex_projection_infos->at(vi1);
+        std::vector<VertexProjectionInfo> vpi0, vpi1;
+        #pragma omp critical (vpis)
+        {
+            vpi0 = vertex_projection_infos->at(vi0);
+            vpi1 = vertex_projection_infos->at(vi1);
+        }
+
         /* According to the previous checks (vertex class within the origial
          * mesh and boundary) there already has to be at least one projection
-         * of each border vertex. */
-        assert(!vpi0.empty() && !vpi1.empty());
+         * of each border vertex in a common texture patch. */
+        bool test = false;
         math::Vec2f vp0(0.0f), vp1(0.0f);
         for (VertexProjectionInfo const & info0 : vpi0) {
             for (VertexProjectionInfo const & info1 : vpi1) {
                 if (info0.texture_patch_id == info1.texture_patch_id) {
                     vp0 = info0.projection;
                     vp1 = info1.projection;
+                    test = true;
                     break;
                 }
             }
         }
+        assert(test);
         total_projection_length += (vp0 - vp1).norm();
         math::Vec3f const & v0 = vertices[vi0];
         math::Vec3f const & v1 = vertices[vi1];
@@ -376,8 +394,6 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
         }
     }
 
-    mve::ByteImage::Ptr image = mve::ByteImage::create(image_size, image_size, 3);
-    //DEBUG image->fill_color(*math::Vec4uc(0, 255, 0, 255));
     std::vector<math::Vec2f> texcoords; texcoords.reserve(hole.size());
     for (std::size_t const face_id : hole) {
         for (std::size_t j = 0; j < 3; ++j) {
@@ -386,6 +402,8 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
             texcoords.push_back(projection);
         }
     }
+    mve::FloatImage::Ptr image = mve::FloatImage::create(image_size, image_size, 3);
+    //DEBUG image->fill_color(*math::Vec4uc(0, 255, 0, 255));
     TexturePatch::Ptr texture_patch = TexturePatch::create(0, hole, texcoords, image);
     std::size_t texture_patch_id;
     #pragma omp critical
@@ -404,7 +422,7 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
             }
         }
         VertexProjectionInfo info = {texture_patch_id, projections[j], faces};
-        #pragma omp critical
+        #pragma omp critical (vpis)
         vertex_projection_infos->at(vertex_id).push_back(info);
     }
 
@@ -438,7 +456,7 @@ generate_texture_patches(UniGraph const & graph, mve::TriangleMesh::ConstPtr mes
         texture_view->load_image();
         std::list<TexturePatchCandidate> candidates;
         for (std::size_t j = 0; j < subgraphs.size(); ++j) {
-            candidates.push_back(generate_candidate(label, *texture_view, subgraphs[j], mesh));
+            candidates.push_back(generate_candidate(label, *texture_view, subgraphs[j], mesh, settings));
         }
         texture_view->release_image();
 
@@ -525,7 +543,7 @@ generate_texture_patches(UniGraph const & graph, mve::TriangleMesh::ConstPtr mes
         }
 
         if (!unseen_faces.empty()) {
-            mve::ByteImage::Ptr image = mve::ByteImage::create(3, 3, 3);
+            mve::FloatImage::Ptr image = mve::FloatImage::create(3, 3, 3);
             std::vector<math::Vec2f> texcoords;
             for (std::size_t i = 0; i < unseen_faces.size(); ++i) {
                 math::Vec2f projections[] = {{2.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 2.0f}};
@@ -545,7 +563,6 @@ generate_texture_patches(UniGraph const & graph, mve::TriangleMesh::ConstPtr mes
 
                     VertexProjectionInfo info = {texture_patch_id, projection, {face_id}};
 
-                    #pragma omp critical
                     vertex_projection_infos->at(vertex_id).push_back(info);
                 }
             }
