@@ -22,6 +22,21 @@ TEX_NAMESPACE_BEGIN
 #define MAX_HOLE_NUM_FACES 100
 #define MAX_HOLE_PATCH_SIZE 100
 
+template <typename T>
+T clamp_nan_low(T const & v, T const & hi, T const & lo) {
+    return (v > lo) ? ((v < hi) ? v : hi) : lo;
+}
+
+template <typename T>
+T clamp_nan_hi(T const & v, T const & hi, T const & lo) {
+    return (v < hi) ? ((v > lo) ? v : lo) : hi;
+}
+
+template <typename T>
+T clamp(T const & v, T const & hi, T const & lo) {
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
+}
+
 void merge_vertex_projection_infos(std::vector<std::vector<VertexProjectionInfo> > * vertex_projection_infos) {
     /* Merge vertex infos within the same texture patch. */
     #pragma omp parallel for
@@ -49,15 +64,17 @@ void merge_vertex_projection_infos(std::vector<std::vector<VertexProjectionInfo>
     }
 }
 
-/** Struct representing a TexturePatch candidate - final texture patches are obtained by merging candiates. */
+/** Struct representing a TexturePatch candidate
+ * - final texture patches are obtained by merging candiates. */
 struct TexturePatchCandidate {
     Rect<int> bounding_box;
     TexturePatch::Ptr texture_patch;
 };
 
-/** Create a TexturePatchCandidate by calculating the faces' bounding box projected into the view,
-  *  relative texture coordinates and extacting the texture views relevant part
-  */
+/** Create a TexturePatchCandidate by calculating the faces' bounding box
+ * projected into the view,
+ *  relative texture coordinates and extacting the texture views relevant part
+ */
 TexturePatchCandidate
 generate_candidate(int label, TextureView const & texture_view,
     std::vector<std::size_t> const & faces, mve::TriangleMesh::ConstPtr mesh,
@@ -130,7 +147,7 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
 
     std::map<std::size_t, std::set<std::size_t> > tmp;
     for (std::size_t const face_id : hole) {
-        std::size_t const v0 = mesh_faces[face_id * 3];
+        std::size_t const v0 = mesh_faces[face_id * 3 + 0];
         std::size_t const v1 = mesh_faces[face_id * 3 + 1];
         std::size_t const v2 = mesh_faces[face_id * 3 + 2];
 
@@ -144,7 +161,7 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
     if (num_vertices > MAX_HOLE_NUM_FACES) return false;
 
     /* Calculate 2D parameterization using the technique from libremesh/patch2d,
-     * which was published as sourcecode accompanying the following paper:
+     * which was published as source code accompanying the following paper:
      *
      * Isotropic Surface Remeshing
      * Simon Fuhrmann, Jens Ackermann, Thomas Kalbe, Michael Goesele
@@ -273,21 +290,21 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
         }
 
         /* According to the previous checks (vertex class within the origial
-         * mesh and boundary) there already has to be at least one projection
+         * mesh and boundary) there has to be at least one projection
          * of each border vertex in a common texture patch. */
-        bool test = false;
-        math::Vec2f vp0(0.0f), vp1(0.0f);
+        math::Vec2f vp0(NAN), vp1(NAN);
         for (VertexProjectionInfo const & info0 : vpi0) {
             for (VertexProjectionInfo const & info1 : vpi1) {
                 if (info0.texture_patch_id == info1.texture_patch_id) {
                     vp0 = info0.projection;
                     vp1 = info1.projection;
-                    test = true;
                     break;
                 }
             }
         }
-        assert(test);
+        assert(!std::isnan(vp0[0]) && !std::isnan(vp0[1]));
+        assert(!std::isnan(vp1[0]) && !std::isnan(vp1[1]));
+
         total_projection_length += (vp0 - vp1).norm();
         math::Vec3f const & v0 = vertices[vi0];
         math::Vec3f const & v1 = vertices[vi1];
@@ -297,14 +314,16 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
 
     if (total_length < std::numeric_limits<float>::epsilon()) return false;
 
-    float length = 0.0f;
     std::vector<math::Vec2f> projections(num_vertices);
-    for (std::size_t j = 0; j < border.size(); ++j) {
-        float angle = 2.0f * MATH_PI * (length / total_length);
-        projections[g2l[border[j]]] = math::Vec2f(std::cos(angle), std::sin(angle));
-        math::Vec3f const & v0 = vertices[border[j]];
-        math::Vec3f const & v1 = vertices[border[(j + 1) % border.size()]];
-        length += (v0 - v1).norm();
+    {
+        float length = 0.0f;
+        for (std::size_t j = 0; j < border.size(); ++j) {
+            float angle = 2.0f * MATH_PI * (length / total_length);
+            projections[g2l[border[j]]] = math::Vec2f(std::cos(angle), std::sin(angle));
+            math::Vec3f const & v0 = vertices[border[j]];
+            math::Vec3f const & v1 = vertices[border[(j + 1) % border.size()]];
+            length += (v0 - v1).norm();
+        }
     }
 
     typedef Eigen::Triplet<float, int> Triplet;
@@ -323,9 +342,10 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
 
             /* Calculate "Mean Value Coordinates" as proposed by Michael S. Floater */
             std::map<std::size_t, float> weights;
+
             std::vector<std::size_t> const & adj_faces = mesh_info[vertex_id].faces;
             for (std::size_t adj_face : adj_faces) {
-                std::size_t v0 = mesh_faces[adj_face * 3];
+                std::size_t v0 = mesh_faces[adj_face * 3 + 0];
                 std::size_t v1 = mesh_faces[adj_face * 3 + 1];
                 std::size_t v2 = mesh_faces[adj_face * 3 + 2];
                 if (v1 == vertex_id) std::swap(v1, v0);
@@ -339,16 +359,17 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
                 /* Ensure numerical stability */
                 if (v01n * v02n < std::numeric_limits<float>::epsilon()) return false;
 
-                float alpha = std::acos(v01.dot(v02) / (v01n * v02n));
-                weights[g2l[v1]] += std::tan(alpha / 2.0f) / v01n;
-                weights[g2l[v2]] += std::tan(alpha / 2.0f) / v02n;
+                float calpha = v01.dot(v02) / (v01n * v02n);
+                float alpha = std::acos(clamp(calpha, -1.0f, 1.0f));
+                weights[g2l[v1]] += std::tan(alpha / 2.0f) / (v01n / 2.0f);
+                weights[g2l[v2]] += std::tan(alpha / 2.0f) / (v02n / 2.0f);
             }
 
             std::map<std::size_t, float>::iterator it;
             float sum = 0.0f;
             for (it = weights.begin(); it != weights.end(); ++it)
                 sum += it->second;
-            assert(sum > 0.0f);
+            if (sum < std::numeric_limits<float>::epsilon()) return false;
             for (it = weights.begin(); it != weights.end(); ++it)
                 it->second /= sum;
 
@@ -357,8 +378,9 @@ bool fill_hole(std::vector<std::size_t> const & hole, UniGraph const & graph,
             for (it = weights.begin(); it != weights.end(); ++it) {
                 if (is_border[it->first]) {
                     std::size_t border_vertex_id = border[idx[it->first]];
-                    bx[idx[j]] += projections[g2l[border_vertex_id]][0] * it->second;
-                    by[idx[j]] += projections[g2l[border_vertex_id]][1] * it->second;
+                    math::Vec2f projection = projections[g2l[border_vertex_id]];
+                    bx[idx[j]] += projection[0] * it->second;
+                    by[idx[j]] += projection[1] * it->second;
                 } else {
                     coeff.push_back(Triplet(idx[j], idx[it->first], -it->second));
                 }
