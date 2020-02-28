@@ -21,8 +21,8 @@
 #include "texture_patch.h"
 #include "texture_atlas.h"
 
-#define MAX_TEXTURE_SIZE 32768
-#define PREF_TEXTURE_SIZE 32768
+#define MAX_TEXTURE_SIZE (8 * 1024)
+#define PREF_TEXTURE_SIZE (4 * 1024)
 #define MIN_TEXTURE_SIZE (256)
 
 TEX_NAMESPACE_BEGIN
