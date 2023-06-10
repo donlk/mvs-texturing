@@ -21,7 +21,7 @@
 #include "texture_patch.h"
 #include "texture_atlas.h"
 
-#define MAX_TEXTURE_SIZE (8 * 1024)
+#define MAX_TEXTURE_SIZE (32 * 1024)
 #define PREF_TEXTURE_SIZE (4 * 1024)
 #define MIN_TEXTURE_SIZE (256)
 
@@ -40,7 +40,7 @@ calculate_texture_size(std::list<TexturePatch::ConstPtr> const & texture_patches
         unsigned int total_area = 0;
         unsigned int max_width = 0;
         unsigned int max_height = 0;
-        unsigned int padding = size >> 7;
+        unsigned int padding = std::min(size >> 7, 32U);
 
         for (TexturePatch::ConstPtr texture_patch : texture_patches) {
             unsigned int width = texture_patch->get_width() + 2 * padding;
@@ -62,22 +62,12 @@ calculate_texture_size(std::list<TexturePatch::ConstPtr> const & texture_patches
             total_area += area;
         }
 
-        assert(max_width < MAX_TEXTURE_SIZE);
-        assert(max_height < MAX_TEXTURE_SIZE);
-        if (size > PREF_TEXTURE_SIZE &&
-            max_width < PREF_TEXTURE_SIZE &&
-            max_height < PREF_TEXTURE_SIZE &&
-            total_area / (PREF_TEXTURE_SIZE * PREF_TEXTURE_SIZE) < 8) {
-            size = PREF_TEXTURE_SIZE;
-            continue;
-        }
-
         if (size <= MIN_TEXTURE_SIZE) {
             return MIN_TEXTURE_SIZE;
         }
 
         if (max_height < size / 2 && max_width < size / 2 &&
-            static_cast<double>(total_area) / (size * size) < 0.2) {
+            static_cast<double>(total_area) / (double(size) * size) < 0.2) {
             size = size / 2;
             continue;
         }
@@ -116,17 +106,9 @@ generate_texture_atlases(std::vector<TexturePatch::Ptr> * orig_texture_patches,
     std::size_t remaining_patches = texture_patches.size();
     std::ofstream tty("/dev/tty", std::ios_base::out);
 
-    #pragma omp parallel
-    {
-    #pragma omp single
-    {
-
-    while (!texture_patches.empty()) {
-        unsigned int texture_size = calculate_texture_size(texture_patches);
-
-        texture_atlases->push_back(TextureAtlas::create(texture_size));
-        TextureAtlas::Ptr texture_atlas = texture_atlases->back();
-
+    unsigned int texture_size = calculate_texture_size(texture_patches);
+    TextureAtlas::Ptr texture_atlas = TextureAtlas::create(texture_size);
+    while (remaining_patches > 0) {
         /* Try to insert each of the texture patches into the texture atlas. */
         std::list<TexturePatch::ConstPtr>::iterator it = texture_patches.begin();
         for (; it != texture_patches.end();) {
@@ -136,33 +118,30 @@ generate_texture_atlases(std::vector<TexturePatch::Ptr> * orig_texture_patches,
             if (total_num_patches > 100
                 && done_patches % (total_num_patches / 100) == 0) {
 
-                tty << "\r\tWorking on atlas " << texture_atlases->size() << " "
-                 << precent << "%... " << std::flush;
+                tty << "\r\tWorking on atlas " << precent << "%... " << std::flush;
             }
 
             if (texture_atlas->insert(*it)) {
-                it = texture_patches.erase(it);
+                ++it;
                 remaining_patches -= 1;
             } else {
-                ++it;
+		/* Texture atlas was too small, try again. */
+		texture_size *= 2;
+		if (texture_size > MAX_TEXTURE_SIZE) {
+			std::cerr << "Exceeded maximum texture size (" << MAX_TEXTURE_SIZE << ")." << std::endl;
+			std::exit(EXIT_FAILURE);
+		}
+
+		remaining_patches = texture_patches.size();
+		it = texture_patches.begin();
+		texture_atlas = TextureAtlas::create(texture_size);
+		break;
             }
         }
-
-        #pragma omp task
-        texture_atlas->finalize();
     }
 
-    std::cout << "\r\tWorking on atlas " << texture_atlases->size()
-        << " 100%... done." << std::endl;
-    util::WallTimer timer;
-    std::cout << "\tFinalizing texture atlases... " << std::flush;
-    #pragma omp taskwait
-    std::cout << "done. (Took: " << timer.get_elapsed_sec() << "s)" << std::endl;
-
-    /* End of single region */
-    }
-    /* End of parallel region. */
-    }
+    texture_atlases->push_back(texture_atlas);
+    texture_atlas->finalize();
 }
 
 TEX_NAMESPACE_END
